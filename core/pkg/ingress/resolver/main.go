@@ -16,38 +16,10 @@ limitations under the License.
 
 package resolver
 
-import (
-	api "k8s.io/client-go/pkg/api/v1"
-
-	"k8s.io/ingress/core/pkg/ingress/defaults"
-)
+import "k8s.io/ingress/core/pkg/ingress/defaults"
 
 // DefaultBackend has a method that returns the backend
 // that must be used as default
 type DefaultBackend interface {
 	GetDefaultBackend() defaults.Backend
-}
-
-// Secret has a method that searches for secrets contenating
-// the namespace and name using a the character /
-type Secret interface {
-	GetSecret(string) (*api.Secret, error)
-}
-
-// AuthCertificate resolves a given secret name into an SSL certificate.
-// The secret must contain 3 keys named:
-//   ca.crt: contains the certificate chain used for authentication
-type AuthCertificate interface {
-	GetAuthCertificate(string) (*AuthSSLCert, error)
-}
-
-// AuthSSLCert contains the necessary information to do certificate based
-// authentication of an ingress location
-type AuthSSLCert struct {
-	// Secret contains the name of the secret this was fetched from
-	Secret string `json:"secret"`
-	// CAFileName contains the path to the secrets 'ca.crt'
-	CAFileName string `json:"caFilename"`
-	// PemSHA contains the SHA1 hash of the 'tls.crt' value
-	PemSHA string `json:"pemSha"`
 }

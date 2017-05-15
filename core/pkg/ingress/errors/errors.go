@@ -16,40 +16,6 @@ limitations under the License.
 
 package errors
 
-import (
-	"fmt"
-
-	"github.com/pkg/errors"
-)
-
-var (
-	// ErrMissingAnnotations the ingress rule does not contain annotations
-	// This is an error only when annotations are being parsed
-	ErrMissingAnnotations = errors.New("ingress rule without annotations")
-
-	// ErrInvalidAnnotationName the ingress rule does contains an invalid
-	// annotation name
-	ErrInvalidAnnotationName = errors.New("invalid annotation name")
-
-	// ErrInvalidAnnotationContent the ingress rule annotation content is
-	// invalid
-	ErrInvalidAnnotationContent = errors.New("invalid annotation content")
-)
-
-// NewInvalidAnnotationContent returns a new InvalidContent error
-func NewInvalidAnnotationContent(name string, val interface{}) error {
-	return InvalidContent{
-		Name: fmt.Sprintf("the annotation %v does not contain a valid value (%v)", name, val),
-	}
-}
-
-// NewLocationDenied returns a new LocationDenied error
-func NewLocationDenied(reason string) error {
-	return LocationDenied{
-		Reason: errors.Errorf("Location denied, reason: %v", reason),
-	}
-}
-
 // InvalidContent error
 type InvalidContent struct {
 	Name string
@@ -73,12 +39,6 @@ func (e LocationDenied) Error() string {
 func IsLocationDenied(e error) bool {
 	_, ok := e.(LocationDenied)
 	return ok
-}
-
-// IsMissingAnnotations checks if the err is an error which
-// indicates the ingress does not contain annotations
-func IsMissingAnnotations(e error) bool {
-	return e == ErrMissingAnnotations
 }
 
 // IsInvalidContent checks if the err is an error which

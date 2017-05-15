@@ -20,9 +20,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/golang/glog"
-	"github.com/imdario/mergo"
-
 	"k8s.io/ingress/core/pkg/ingress"
 )
 
@@ -114,15 +111,4 @@ func toLowerCaseASCII(in string) string {
 		}
 	}
 	return string(out)
-}
-
-func mergeLocationAnnotations(loc *ingress.Location, anns map[string]interface{}) {
-	if _, ok := anns[DeniedKeyName]; ok {
-		loc.Denied = anns[DeniedKeyName].(error)
-	}
-	delete(anns, DeniedKeyName)
-	err := mergo.Map(loc, anns)
-	if err != nil {
-		glog.Errorf("unexpected error merging extracted annotations in location type: %v", err)
-	}
 }

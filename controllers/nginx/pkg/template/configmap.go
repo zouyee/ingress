@@ -17,19 +17,10 @@ limitations under the License.
 package template
 
 import (
-	"strconv"
-	"strings"
-
 	"github.com/golang/glog"
 	"github.com/mitchellh/mapstructure"
 
 	"k8s.io/ingress/controllers/nginx/pkg/config"
-)
-
-const (
-	customHTTPErrors     = "custom-http-errors"
-	skipAccessLogUrls    = "skip-access-log-urls"
-	whitelistSourceRange = "whitelist-source-range"
 )
 
 // ReadConfig obtains the configuration defined by the user merged with the defaults.
@@ -42,34 +33,7 @@ func ReadConfig(src map[string]string) config.Configuration {
 		}
 	}
 
-	errors := make([]int, 0)
-	skipUrls := make([]string, 0)
-	whitelist := make([]string, 0)
-
-	if val, ok := conf[customHTTPErrors]; ok {
-		delete(conf, customHTTPErrors)
-		for _, i := range strings.Split(val, ",") {
-			j, err := strconv.Atoi(i)
-			if err != nil {
-				glog.Warningf("%v is not a valid http code: %v", i, err)
-			} else {
-				errors = append(errors, j)
-			}
-		}
-	}
-	if val, ok := conf[skipAccessLogUrls]; ok {
-		delete(conf, skipAccessLogUrls)
-		skipUrls = strings.Split(val, ",")
-	}
-	if val, ok := conf[whitelistSourceRange]; ok {
-		delete(conf, whitelistSourceRange)
-		whitelist = append(whitelist, strings.Split(val, ",")...)
-	}
-
 	to := config.NewDefault()
-	to.CustomHTTPErrors = filterErrors(errors)
-	to.SkipAccessLogURLs = skipUrls
-	to.WhitelistSourceRange = whitelist
 
 	config := &mapstructure.DecoderConfig{
 		Metadata:         nil,
@@ -88,17 +52,4 @@ func ReadConfig(src map[string]string) config.Configuration {
 	}
 
 	return to
-}
-
-func filterErrors(codes []int) []int {
-	var fa []int
-	for _, code := range codes {
-		if code > 299 && code < 600 {
-			fa = append(fa, code)
-		} else {
-			glog.Warningf("error code %v is not valid for custom error pages", code)
-		}
-	}
-
-	return fa
 }

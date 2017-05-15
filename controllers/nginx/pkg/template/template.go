@@ -21,18 +21,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os/exec"
 	"strings"
 	text_template "text/template"
-
-	"k8s.io/apimachinery/pkg/util/sets"
 
 	"github.com/golang/glog"
 
 	"k8s.io/ingress/controllers/nginx/pkg/config"
 	"k8s.io/ingress/core/pkg/ingress"
-	ing_net "k8s.io/ingress/core/pkg/net"
 	"k8s.io/ingress/core/pkg/watch"
 )
 
@@ -134,39 +130,16 @@ var (
 		"buildAuthLocation":        buildAuthLocation,
 		"buildAuthResponseHeaders": buildAuthResponseHeaders,
 		"buildProxyPass":           buildProxyPass,
-		"buildRateLimitZones":      buildRateLimitZones,
-		"buildRateLimit":           buildRateLimit,
-		"buildResolvers":           buildResolvers,
-		"isLocationAllowed":        isLocationAllowed,
-		"buildLogFormatUpstream":   buildLogFormatUpstream,
-		"contains":                 strings.Contains,
-		"hasPrefix":                strings.HasPrefix,
-		"hasSuffix":                strings.HasSuffix,
-		"toUpper":                  strings.ToUpper,
-		"toLower":                  strings.ToLower,
+
+		"isLocationAllowed":      isLocationAllowed,
+		"buildLogFormatUpstream": buildLogFormatUpstream,
+		"contains":               strings.Contains,
+		"hasPrefix":              strings.HasPrefix,
+		"hasSuffix":              strings.HasSuffix,
+		"toUpper":                strings.ToUpper,
+		"toLower":                strings.ToLower,
 	}
 )
-
-// buildResolvers returns the resolvers reading the /etc/resolv.conf file
-func buildResolvers(a interface{}) string {
-	// NGINX need IPV6 addresses to be surrounded by brakets
-	nss := a.([]net.IP)
-	if len(nss) == 0 {
-		return ""
-	}
-
-	r := []string{"resolver"}
-	for _, ns := range nss {
-		if ing_net.IsIPV6(ns) {
-			r = append(r, fmt.Sprintf("[%v]", ns))
-		} else {
-			r = append(r, fmt.Sprintf("%v", ns))
-		}
-	}
-	r = append(r, "valid=30s;")
-
-	return strings.Join(r, " ")
-}
 
 // buildLocation produces the location string, if the ingress has redirects
 // (specified through the ingress.kubernetes.io/rewrite-to annotation)
@@ -272,97 +245,8 @@ func buildProxyPass(b interface{}, loc interface{}) string {
 		path = fmt.Sprintf("%s/", path)
 	}
 
-	if len(location.Redirect.Target) > 0 {
-		abu := ""
-		if location.Redirect.AddBaseURL {
-			// path has a slash suffix, so that it can be connected with baseuri directly
-			bPath := fmt.Sprintf("%s%s", path, "$baseuri")
-			abu = fmt.Sprintf(`subs_filter '<head(.*)>' '<head$1><base href="$scheme://$http_host%v">' r;
-	subs_filter '<HEAD(.*)>' '<HEAD$1><base href="$scheme://$http_host%v">' r;
-	`, bPath, bPath)
-		}
-
-		if location.Redirect.Target == slash {
-			// special case redirect to /
-			// ie /something to /
-			return fmt.Sprintf(`
-	rewrite %s(.*) /$1 break;
-	rewrite %s / break;
-	proxy_pass %s://%s;
-	%v`, path, location.Path, proto, location.Backend, abu)
-		}
-
-		return fmt.Sprintf(`
-	rewrite %s(.*) %s/$1 break;
-	proxy_pass %s://%s;
-	%v`, path, location.Redirect.Target, proto, location.Backend, abu)
-	}
-
 	// default proxy_pass
 	return defProxyPass
-}
-
-// buildRateLimitZones produces an array of limit_conn_zone in order to allow
-// rate limiting of request. Each Ingress rule could have up to two zones, one
-// for connection limit by IP address and other for limiting request per second
-func buildRateLimitZones(input interface{}) []string {
-	zones := sets.String{}
-
-	servers, ok := input.([]*ingress.Server)
-	if !ok {
-		return zones.List()
-	}
-
-	for _, server := range servers {
-		for _, loc := range server.Locations {
-
-			if loc.RateLimit.Connections.Limit > 0 {
-				zone := fmt.Sprintf("limit_conn_zone $binary_remote_addr zone=%v:%vm;",
-					loc.RateLimit.Connections.Name,
-					loc.RateLimit.Connections.SharedSize)
-				if !zones.Has(zone) {
-					zones.Insert(zone)
-				}
-			}
-
-			if loc.RateLimit.RPS.Limit > 0 {
-				zone := fmt.Sprintf("limit_req_zone $binary_remote_addr zone=%v:%vm rate=%vr/s;",
-					loc.RateLimit.RPS.Name,
-					loc.RateLimit.RPS.SharedSize,
-					loc.RateLimit.RPS.Limit)
-				if !zones.Has(zone) {
-					zones.Insert(zone)
-				}
-			}
-		}
-	}
-
-	return zones.List()
-}
-
-// buildRateLimit produces an array of limit_req to be used inside the Path of
-// Ingress rules. The order: connections by IP first and RPS next.
-func buildRateLimit(input interface{}) []string {
-	limits := []string{}
-
-	loc, ok := input.(*ingress.Location)
-	if !ok {
-		return limits
-	}
-
-	if loc.RateLimit.Connections.Limit > 0 {
-		limit := fmt.Sprintf("limit_conn %v %v;",
-			loc.RateLimit.Connections.Name, loc.RateLimit.Connections.Limit)
-		limits = append(limits, limit)
-	}
-
-	if loc.RateLimit.RPS.Limit > 0 {
-		limit := fmt.Sprintf("limit_req zone=%v burst=%v nodelay;",
-			loc.RateLimit.RPS.Name, loc.RateLimit.RPS.Burst)
-		limits = append(limits, limit)
-	}
-
-	return limits
 }
 
 func isLocationAllowed(input interface{}) bool {

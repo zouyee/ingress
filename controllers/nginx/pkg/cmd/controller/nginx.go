@@ -25,24 +25,16 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/golang/glog"
-	"github.com/spf13/pflag"
-
-	proxyproto "github.com/armon/go-proxyproto"
-	api_v1 "k8s.io/client-go/pkg/api/v1"
 
 	"k8s.io/ingress/controllers/nginx/pkg/config"
 	ngx_template "k8s.io/ingress/controllers/nginx/pkg/template"
 	"k8s.io/ingress/controllers/nginx/pkg/version"
 	"k8s.io/ingress/core/pkg/ingress"
 	"k8s.io/ingress/core/pkg/ingress/defaults"
-	"k8s.io/ingress/core/pkg/net/dns"
-	"k8s.io/ingress/core/pkg/net/ssl"
 )
 
 type statusModule string
@@ -73,49 +65,9 @@ func newNGINXController() ingress.Controller {
 		ngx = binary
 	}
 
-	h, err := dns.GetSystemNameServers()
-	if err != nil {
-		glog.Warningf("unexpected error reading system nameservers: %v", err)
-	}
-
 	n := &NGINXController{
-		binary:        ngx,
-		configmap:     &api_v1.ConfigMap{},
-		isIPV6Enabled: isIPv6Enabled(),
-		resolver:      h,
-		proxy:         &proxy{},
+		binary: ngx,
 	}
-
-	listener, err := net.Listen("tcp", ":443")
-	if err != nil {
-		glog.Fatalf("%v", err)
-	}
-
-	proxyList := &proxyproto.Listener{Listener: listener}
-
-	// start goroutine that accepts tcp connections in port 443
-	go func() {
-		for {
-			var conn net.Conn
-			var err error
-
-			if n.isProxyProtocolEnabled {
-				// we need to wrap the listener in order to decode
-				// proxy protocol before handling the connection
-				conn, err = proxyList.Accept()
-			} else {
-				conn, err = listener.Accept()
-			}
-
-			if err != nil {
-				glog.Warningf("unexpected error accepting tcp connection: %v", err)
-				continue
-			}
-
-			glog.V(3).Infof("remote address %s to local %s", conn.RemoteAddr(), conn.LocalAddr())
-			go n.proxy.Handle(conn)
-		}
-	}()
 
 	var onChange func()
 	onChange = func() {
@@ -151,28 +103,13 @@ Error loading new template : %v
 type NGINXController struct {
 	t *ngx_template.Template
 
-	configmap *api_v1.ConfigMap
-
 	storeLister ingress.StoreLister
 
-	binary   string
-	resolver []net.IP
+	binary string
 
 	cmdArgs []string
 
-	watchClass string
-	namespace  string
-
-	stats        *statsCollector
 	statusModule statusModule
-
-	// returns true if IPV6 is enabled in the pod
-	isIPV6Enabled bool
-
-	// returns true if proxy protocol es enabled
-	isProxyProtocolEnabled bool
-
-	proxy *proxy
 }
 
 // Start start a new NGINX master process running in foreground.
@@ -249,12 +186,8 @@ func (n NGINXController) Reload(data []byte) ([]byte, bool, error) {
 
 // BackendDefaults returns the nginx defaults
 func (n NGINXController) BackendDefaults() defaults.Backend {
-	if n.configmap == nil {
-		d := config.NewDefault()
-		return d.Backend
-	}
-
-	return ngx_template.ReadConfig(n.configmap.Data).Backend
+	d := config.NewDefault()
+	return d.Backend
 }
 
 // isReloadRequired check if the new configuration file is different
@@ -309,28 +242,6 @@ func (n NGINXController) Info() *ingress.BackendInfo {
 	}
 }
 
-// OverrideFlags customize NGINX controller flags
-func (n *NGINXController) OverrideFlags(flags *pflag.FlagSet) {
-	ic, _ := flags.GetString("ingress-class")
-	wc, _ := flags.GetString("watch-namespace")
-
-	if ic == "" {
-		ic = defIngressClass
-	}
-
-	if ic != defIngressClass {
-		glog.Warningf("only Ingress with class %v will be processed by this ingress controller", ic)
-	}
-
-	flags.Set("ingress-class", ic)
-	n.stats = newStatsCollector(wc, ic, n.binary)
-}
-
-// DefaultIngressClass just return the default ingress class
-func (n NGINXController) DefaultIngressClass() string {
-	return defIngressClass
-}
-
 // testTemplate checks if the NGINX configuration inside the byte array is valid
 // running the command "nginx -t" using a temporal file.
 func (n NGINXController) testTemplate(cfg []byte) error {
@@ -362,189 +273,9 @@ Error: %v
 	return nil
 }
 
-// SetConfig sets the configured configmap
-func (n *NGINXController) SetConfig(cmap *api_v1.ConfigMap) {
-	n.configmap = cmap
-
-	n.isProxyProtocolEnabled = false
-	if cmap == nil {
-		return
-	}
-
-	val, ok := cmap.Data["use-proxy-protocol"]
-	if ok {
-		b, err := strconv.ParseBool(val)
-		if err == nil {
-			n.isProxyProtocolEnabled = b
-			return
-		}
-	}
-}
-
 // SetListers sets the configured store listers in the generic ingress controller
 func (n *NGINXController) SetListers(lister ingress.StoreLister) {
 	n.storeLister = lister
-}
-
-// OnUpdate is called by syncQueue in https://github.com/aledbf/ingress-controller/blob/master/pkg/ingress/controller/controller.go#L82
-// periodically to keep the configuration in sync.
-//
-// convert configmap to custom configuration object (different in each implementation)
-// write the custom template (the complexity depends on the implementation)
-// write the configuration file
-// returning nill implies the backend will be reloaded.
-// if an error is returned means requeue the update
-func (n *NGINXController) OnUpdate(ingressCfg ingress.Configuration) ([]byte, error) {
-	var longestName int
-	for _, srv := range ingressCfg.Servers {
-		if longestName < len(srv.Hostname) {
-			longestName = len(srv.Hostname)
-		}
-	}
-
-	cfg := ngx_template.ReadConfig(n.configmap.Data)
-	cfg.Resolver = n.resolver
-
-	// we need to check if the status module configuration changed
-	if cfg.EnableVtsStatus {
-		n.setupMonitor(vtsStatusModule)
-	} else {
-		n.setupMonitor(defaultStatusModule)
-	}
-
-	// NGINX cannot resize the has tables used to store server names.
-	// For this reason we check if the defined size defined is correct
-	// for the FQDN defined in the ingress rules adjusting the value
-	// if is required.
-	// https://trac.nginx.org/nginx/ticket/352
-	// https://trac.nginx.org/nginx/ticket/631
-	nameHashBucketSize := nginxHashBucketSize(longestName)
-	if cfg.ServerNameHashBucketSize == 0 {
-		glog.V(3).Infof("adjusting ServerNameHashBucketSize variable to %v", nameHashBucketSize)
-		cfg.ServerNameHashBucketSize = nameHashBucketSize
-	}
-	serverNameHashMaxSize := nextPowerOf2(len(ingressCfg.Servers))
-	if cfg.ServerNameHashMaxSize == 0 {
-		glog.V(3).Infof("adjusting ServerNameHashMaxSize variable to %v", serverNameHashMaxSize)
-		cfg.ServerNameHashMaxSize = serverNameHashMaxSize
-	}
-
-	// the limit of open files is per worker process
-	// and we leave some room to avoid consuming all the FDs available
-	wp, err := strconv.Atoi(cfg.WorkerProcesses)
-	if err != nil {
-		wp = 1
-	}
-	maxOpenFiles := (sysctlFSFileMax() / wp) - 1024
-	if maxOpenFiles < 0 {
-		// this means the value of RLIMIT_NOFILE is too low.
-		maxOpenFiles = 1024
-	}
-
-	setHeaders := map[string]string{}
-	if cfg.ProxySetHeaders != "" {
-		cmap, exists, err := n.storeLister.ConfigMap.GetByKey(cfg.ProxySetHeaders)
-		if err != nil {
-			glog.Warningf("unexpected error reading configmap %v: %v", cfg.ProxySetHeaders, err)
-		}
-
-		if exists {
-			setHeaders = cmap.(*api_v1.ConfigMap).Data
-		}
-	}
-
-	sslDHParam := ""
-	if cfg.SSLDHParam != "" {
-		secretName := cfg.SSLDHParam
-		s, exists, err := n.storeLister.Secret.GetByKey(secretName)
-		if err != nil {
-			glog.Warningf("unexpected error reading secret %v: %v", secretName, err)
-		}
-
-		if exists {
-			secret := s.(*api_v1.Secret)
-			nsSecName := strings.Replace(secretName, "/", "-", -1)
-
-			dh, ok := secret.Data["dhparam.pem"]
-			if ok {
-				pemFileName, err := ssl.AddOrUpdateDHParam(nsSecName, dh)
-				if err != nil {
-					glog.Warningf("unexpected error adding or updating dhparam %v file: %v", nsSecName, err)
-				} else {
-					sslDHParam = pemFileName
-				}
-			}
-		}
-	}
-
-	cfg.SSLDHParam = sslDHParam
-
-	content, err := n.t.Write(config.TemplateConfig{
-		ProxySetHeaders:     setHeaders,
-		MaxOpenFiles:        maxOpenFiles,
-		BacklogSize:         sysctlSomaxconn(),
-		Backends:            ingressCfg.Backends,
-		PassthroughBackends: ingressCfg.PassthroughBackends,
-		Servers:             ingressCfg.Servers,
-		TCPBackends:         ingressCfg.TCPEndpoints,
-		UDPBackends:         ingressCfg.UDPEndpoints,
-		HealthzURI:          ngxHealthPath,
-		CustomErrors:        len(cfg.CustomHTTPErrors) > 0,
-		Cfg:                 cfg,
-		IsIPV6Enabled:       n.isIPV6Enabled && !cfg.DisableIpv6,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	if err := n.testTemplate(content); err != nil {
-		return nil, err
-	}
-
-	servers := []*server{}
-	for _, pb := range ingressCfg.PassthroughBackends {
-		svc := pb.Service
-		if svc == nil {
-			glog.Warningf("missing service for PassthroughBackends %v", pb.Backend)
-			continue
-		}
-		port, err := strconv.Atoi(pb.Port.String())
-		if err != nil {
-			for _, sp := range svc.Spec.Ports {
-				if sp.Name == pb.Port.String() {
-					port = int(sp.Port)
-					break
-				}
-			}
-		} else {
-			for _, sp := range svc.Spec.Ports {
-				if sp.Port == int32(port) {
-					port = int(sp.Port)
-					break
-				}
-			}
-		}
-
-		servers = append(servers, &server{
-			Hostname: pb.Hostname,
-			IP:       svc.Spec.ClusterIP,
-			Port:     port,
-		})
-	}
-
-	n.proxy.ServerList = servers
-
-	return content, nil
-}
-
-// nginxHashBucketSize computes the correct nginx hash_bucket_size for a hash with the given longest key
-func nginxHashBucketSize(longestString int) int {
-	// See https://github.com/kubernetes/ingress/issues/623 for an explanation
-	wordSize := 8 // Assume 64 bit CPU
-	n := longestString + 2
-	aligned := (n + wordSize - 1) & ^(wordSize - 1)
-	rawSize := wordSize + wordSize + aligned
-	return nextPowerOf2(rawSize)
 }
 
 // Name returns the healthcheck name
@@ -577,9 +308,4 @@ func nextPowerOf2(v int) int {
 	v++
 
 	return v
-}
-
-func isIPv6Enabled() bool {
-	cmd := exec.Command("test", "-f", "/proc/net/if_inet6")
-	return cmd.Run() == nil
 }
