@@ -27,17 +27,14 @@ func NewIngressController(backend ingress.Controller) *GenericController {
 	var (
 		flags = pflag.NewFlagSet("", pflag.ExitOnError)
 
-		apiserverHost = flags.String("etcd-host", "", "The address of the Kubernetes Apiserver "+
+		etcdHost = flags.String("etcd-host", "", "The address of the etcd Host "+
 			"to connect to in the format of protocol://address:port, e.g., "+
-			"http://localhost:8080. If not specified, the assumption is that the binary runs inside a "+
-			"Kubernetes cluster and local discovery is attempted.")
+			"http://localhost:2039. ")
 
 		resyncPeriod = flags.Duration("sync-period", 60*time.Second,
 			`Relist and confirm cloud resources this often.`)
 
 		healthzPort = flags.Int("healthz-port", 10254, "port for healthz endpoint.")
-
-		profiling = flags.Bool("profiling", true, `Enable profiling via web interface host:port/debug/pprof/`)
 
 		defHealthzURL = flags.String("health-check-path", "/healthz", `Defines
 		the URL to be used as health check inside in the default server in NGINX.`)
@@ -53,22 +50,11 @@ func NewIngressController(backend ingress.Controller) *GenericController {
 	glog.Info(backend.Info())
 
 	config := &Configuration{
-		UpdateStatus:            *updateStatus,
-		ElectionID:              *electionID,
-		Client:                  kubeClient,
-		ResyncPeriod:            *resyncPeriod,
-		DefaultService:          *defaultSvc,
-		IngressClass:            *ingressClass,
-		DefaultIngressClass:     backend.DefaultIngressClass(),
-		Namespace:               *watchNamespace,
-		ConfigMapName:           *configMap,
-		TCPConfigMapName:        *tcpConfigMapName,
-		UDPConfigMapName:        *udpConfigMapName,
-		DefaultSSLCertificate:   *defSSLCertificate,
-		DefaultHealthzURL:       *defHealthzURL,
-		PublishService:          *publishSvc,
-		Backend:                 backend,
-		ForceNamespaceIsolation: *forceIsolation,
+		UpdateStatus:      *updateStatus,
+		Client:            kubeClient,
+		ResyncPeriod:      *resyncPeriod,
+		DefaultHealthzURL: *defHealthzURL,
+		Backend:           backend,
 	}
 
 	ic := newIngressController(config)

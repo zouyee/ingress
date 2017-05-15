@@ -43,8 +43,7 @@ const (
 	ngxHealthPort = 18080
 	ngxHealthPath = "/healthz"
 
-	defaultStatusModule statusModule = "default"
-	vtsStatusModule     statusModule = "vts"
+	vtsStatusModule statusModule = "vts"
 
 	errNoChild = "wait: no child processes"
 )
@@ -280,7 +279,7 @@ func (n *NGINXController) SetListers(lister ingress.StoreLister) {
 
 // Name returns the healthcheck name
 func (n NGINXController) Name() string {
-	return "Ingress Controller"
+	return "Cluster Controller"
 }
 
 // Check returns if the nginx healthz endpoint is returning ok (status code 200)

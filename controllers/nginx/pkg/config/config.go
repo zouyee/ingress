@@ -75,9 +75,6 @@ func NewDefault() Configuration {
 // is enabled.
 func (cfg Configuration) BuildLogFormatUpstream() string {
 	if cfg.LogFormatUpstream == logFormatUpstream {
-		if cfg.UseProxyProtocol {
-			return fmt.Sprintf(cfg.LogFormatUpstream, "$proxy_protocol_addr")
-		}
 		return fmt.Sprintf(cfg.LogFormatUpstream, "$remote_addr")
 	}
 
