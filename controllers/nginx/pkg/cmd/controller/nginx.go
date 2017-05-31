@@ -25,10 +25,13 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/golang/glog"
+	"github.com/zouyee/ingress/core/pkg/net/ssl"
 
 	"k8s.io/ingress/controllers/nginx/pkg/config"
 	ngx_template "k8s.io/ingress/controllers/nginx/pkg/template"
@@ -49,13 +52,13 @@ const (
 )
 
 var (
-	tmplPath        = "/etc/nginx/template/nginx.tmpl"
-	cfgPath         = "/etc/nginx/nginx.conf"
-	binary          = "/usr/sbin/nginx"
+	tmplPath        = "/usr/local/openresty/nginx/template/nginx.tmpl"
+	cfgPath         = "/usr/local/openresty/nginx/conf/nginx.conf"
+	binary          = "/usr/local/openresty/nginx/sbin/nginx"
 	defIngressClass = "nginx"
 )
 
-// newNGINXController creates a new NGINX Ingress controller.
+// newNGINXController creates a new NGINX cluster controller.
 // If the environment variable NGINX_BINARY exists it will be used
 // as source for nginx commands
 func newNGINXController() ingress.Controller {
@@ -102,13 +105,9 @@ Error loading new template : %v
 type NGINXController struct {
 	t *ngx_template.Template
 
-	storeLister ingress.StoreLister
-
 	binary string
 
 	cmdArgs []string
-
-	statusModule statusModule
 }
 
 // Start start a new NGINX master process running in foreground.
@@ -164,6 +163,161 @@ func (n *NGINXController) start(cmd *exec.Cmd, done chan error) {
 	go func() {
 		done <- cmd.Wait()
 	}()
+}
+
+func (n *NGINXController) OnUpdate(ingressCfg ingress.Configuration) ([]byte, error) {
+	var longestName int
+	for _, srv := range ingressCfg.Servers {
+		if longestName < len(srv.Hostname) {
+			longestName = len(srv.Hostname)
+		}
+	}
+
+	cfg := ngx_template.ReadConfig(n.configmap.Data)
+	cfg.Resolver = n.resolver
+
+	// we need to check if the status module configuration changed
+	if cfg.EnableVtsStatus {
+		n.setupMonitor(vtsStatusModule)
+	} else {
+		n.setupMonitor(defaultStatusModule)
+	}
+
+	// NGINX cannot resize the has tables used to store server names.
+	// For this reason we check if the defined size defined is correct
+	// for the FQDN defined in the ingress rules adjusting the value
+	// if is required.
+	// https://trac.nginx.org/nginx/ticket/352
+	// https://trac.nginx.org/nginx/ticket/631
+	nameHashBucketSize := nginxHashBucketSize(longestName)
+	if cfg.ServerNameHashBucketSize == 0 {
+		glog.V(3).Infof("adjusting ServerNameHashBucketSize variable to %v", nameHashBucketSize)
+		cfg.ServerNameHashBucketSize = nameHashBucketSize
+	}
+	serverNameHashMaxSize := nextPowerOf2(len(ingressCfg.Servers))
+	if cfg.ServerNameHashMaxSize == 0 {
+		glog.V(3).Infof("adjusting ServerNameHashMaxSize variable to %v", serverNameHashMaxSize)
+		cfg.ServerNameHashMaxSize = serverNameHashMaxSize
+	}
+
+	// the limit of open files is per worker process
+	// and we leave some room to avoid consuming all the FDs available
+	wp, err := strconv.Atoi(cfg.WorkerProcesses)
+	if err != nil {
+		wp = 1
+	}
+	maxOpenFiles := (sysctlFSFileMax() / wp) - 1024
+	if maxOpenFiles < 0 {
+		// this means the value of RLIMIT_NOFILE is too low.
+		maxOpenFiles = 1024
+	}
+
+	setHeaders := map[string]string{}
+	if cfg.ProxySetHeaders != "" {
+		cmap, exists, err := n.storeLister.ConfigMap.GetByKey(cfg.ProxySetHeaders)
+		if err != nil {
+			glog.Warningf("unexpected error reading configmap %v: %v", cfg.ProxySetHeaders, err)
+		}
+
+		if exists {
+			setHeaders = cmap.(*api_v1.ConfigMap).Data
+		}
+	}
+
+	sslDHParam := ""
+	if cfg.SSLDHParam != "" {
+		secretName := cfg.SSLDHParam
+		s, exists, err := n.storeLister.Secret.GetByKey(secretName)
+		if err != nil {
+			glog.Warningf("unexpected error reading secret %v: %v", secretName, err)
+		}
+
+		if exists {
+			secret := s.(*api_v1.Secret)
+			nsSecName := strings.Replace(secretName, "/", "-", -1)
+
+			dh, ok := secret.Data["dhparam.pem"]
+			if ok {
+				pemFileName, err := ssl.AddOrUpdateDHParam(nsSecName, dh)
+				if err != nil {
+					glog.Warningf("unexpected error adding or updating dhparam %v file: %v", nsSecName, err)
+				} else {
+					sslDHParam = pemFileName
+				}
+			}
+		}
+	}
+
+	cfg.SSLDHParam = sslDHParam
+
+	content, err := n.t.Write(config.TemplateConfig{
+		ProxySetHeaders:     setHeaders,
+		MaxOpenFiles:        maxOpenFiles,
+		BacklogSize:         sysctlSomaxconn(),
+		Backends:            ingressCfg.Backends,
+		PassthroughBackends: ingressCfg.PassthroughBackends,
+		Servers:             ingressCfg.Servers,
+		TCPBackends:         ingressCfg.TCPEndpoints,
+		UDPBackends:         ingressCfg.UDPEndpoints,
+		HealthzURI:          ngxHealthPath,
+		CustomErrors:        len(cfg.CustomHTTPErrors) > 0,
+		Cfg:                 cfg,
+		IsIPV6Enabled:       n.isIPV6Enabled && !cfg.DisableIpv6,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if err := n.testTemplate(content); err != nil {
+		return nil, err
+	}
+
+	servers := []*server{}
+	for _, pb := range ingressCfg.PassthroughBackends {
+		svc := pb.Service
+		if svc == nil {
+			glog.Warningf("missing service for PassthroughBackends %v", pb.Backend)
+			continue
+		}
+		port, err := strconv.Atoi(pb.Port.String())
+		if err != nil {
+			for _, sp := range svc.Spec.Ports {
+				if sp.Name == pb.Port.String() {
+					port = int(sp.Port)
+					break
+				}
+			}
+		} else {
+			for _, sp := range svc.Spec.Ports {
+				if sp.Port == int32(port) {
+					port = int(sp.Port)
+					break
+				}
+			}
+		}
+
+		//TODO: Allow PassthroughBackends to specify they support proxy-protocol
+		servers = append(servers, &server{
+			Hostname:      pb.Hostname,
+			IP:            svc.Spec.ClusterIP,
+			Port:          port,
+			ProxyProtocol: false,
+		})
+	}
+
+	n.proxy.ServerList = servers
+
+	return content, nil
+}
+
+// nginxHashBucketSize computes the correct nginx hash_bucket_size for a hash with the given longest key
+func nginxHashBucketSize(longestString int) int {
+	// See https://github.com/kubernetes/ingress/issues/623 for an explanation
+	wordSize := 8 // Assume 64 bit CPU
+	n := longestString + 2
+	aligned := (n + wordSize - 1) & ^(wordSize - 1)
+	rawSize := wordSize + wordSize + aligned
+	return nextPowerOf2(rawSize)
 }
 
 // Reload checks if the running configuration file is different

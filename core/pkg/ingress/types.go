@@ -17,26 +17,13 @@ limitations under the License.
 package ingress
 
 import (
-	"k8s.io/apiserver/pkg/server/healthz"
-
+	"k8s.io/ingress/controllers/nginx/pkg/config"
 	"k8s.io/ingress/core/pkg/ingress/defaults"
-	"k8s.io/ingress/core/pkg/ingress/store"
-)
-
-var (
-	// DefaultSSLDirectory defines the location where the SSL certificates will be generated
-	// This directory contains all the SSL certificates that are specified in Ingress rules.
-	// The name of each file is <namespace>-<secret name>.pem. The content is the concatenated
-	// certificate and key.
-	DefaultSSLDirectory = "/ingress-controller/ssl"
 )
 
 // Controller holds the methods to handle an Ingress backend
 // TODO (#18): Make sure this is sufficiently supportive of other backends.
 type Controller interface {
-	// HealthzChecker returns is a named healthz check that returns the ingress
-	// controller status
-	healthz.HealthzChecker
 
 	// Reload takes a byte array representing the new loadbalancer configuration,
 	// and returns a byte array containing any output/errors from the backend and
@@ -46,51 +33,16 @@ type Controller interface {
 	// If reloading fails, there should be not change in the running configuration or
 	// the given byte array.
 	Reload(data []byte) ([]byte, bool, error)
-	// OnUpdate callback invoked from the sync queue https://k8s.io/ingress/core/blob/master/pkg/ingress/controller/controller.go#L387
-	// when an update occurs. This is executed frequently because Ingress
-	// controllers watches changes in:
-	// - Ingresses: main work
-	// - Secrets: referenced from Ingress rules with TLS configured
-	// - ConfigMaps: where the controller reads custom configuration
-	// - Services: referenced from Ingress rules and required to obtain
-	//	 information about ports and annotations
-	// - Endpoints: referenced from Services and what the backend uses
-	//	 to route traffic
-	// Any update to services, endpoints, secrets (only those referenced from Ingress)
-	// and ingress trigger the execution.
-	// Notifications of type Add, Update and Delete:
-	// https://github.com/kubernetes/kubernetes/blob/master/pkg/client/cache/controller.go#L164
-	//
-	// Configuration returns the translation from Ingress rules containing
-	// information about all the upstreams (service endpoints ) "virtual"
-	// servers (FQDN) and all the locations inside each server. Each
-	// location contains information about all the annotations were configured
-	// https://k8s.io/ingress/core/blob/master/pkg/ingress/types.go#L83
-	// The backend returns the contents of the configuration file or an error
-	// with the reason why was not possible to generate the file.
-	//
-	// The returned configuration is then passed to test, and then to reload
-	// if there is no errors.
+
+	OnUpdate(config.Configuration) ([]byte, error)
 
 	// SetListers allows the access of store listers present in the generic controller
 	// This avoid the use of the kubernetes client.
-	SetListers(StoreLister)
 	// BackendDefaults returns the minimum settings required to configure the
 	// communication to endpoints
 	BackendDefaults() defaults.Backend
 	// Info returns information about the ingress controller
 	Info() *BackendInfo
-}
-
-// StoreLister returns the configured stores for ingresses, services,
-// endpoints, secrets and configmaps.
-type StoreLister struct {
-	Ingress   store.IngressLister
-	Service   store.ServiceLister
-	Node      store.NodeLister
-	Endpoint  store.EndpointLister
-	Secret    store.SecretLister
-	ConfigMap store.ConfigMapLister
 }
 
 // BackendInfo returns information about the backend.
@@ -117,12 +69,33 @@ type Backend struct {
 	Log     Endpoint   `json:"log"`
 }
 
-// Endpoint describes a kubernetes endpoint in a backend
+// Endpoint ...
 type Endpoint struct {
-	// Address IP address of the endpoint
-	Address string `json:"address"`
-	// Port number of the TCP port
+	Kind       string `json:"kind"`
+	APIVersion string `json:"apiVersion"`
+	MetaData   Meta   `json:"metadata"`
+	Spec       Status `json:"spec"`
+	NodeInfo   Info   `json:"nodeInfo,omitempty"`
+}
+
+// Meta ...
+type Meta struct {
+	IP   string `json:"ip"`
+	UID  string `json:"uid"`
 	Port string `json:"port"`
-	// node in cluster role
-	Role string `json:"role"`
+}
+
+// Status ...
+type Status struct {
+	HostName string   `json:"hostname"`
+	Cluster  string   `json:"cluster,omitempty"`
+	Health   string   `json:"health,omitempty"`
+	Role     []string `json:"role,omitempty"`
+}
+
+// Info ...
+type Info struct {
+	UserName string `json:"username,omitempty"`
+	PassWord string `json:"password,omitempty"`
+	Ping     string `json:"ping,omitempty"`
 }
