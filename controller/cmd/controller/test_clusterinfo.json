@@ -1,0 +1,15 @@
+{
+	"name": "default",
+	"masters": [
+		{
+		"name": "ys-2",
+		"cluster": "default",
+		"address": "10.142.21.152",
+		"port": "22"}
+	],
+	"token": "a",
+	"configpath":"a",
+	"step": "a",
+	"status": "run"
+
+}

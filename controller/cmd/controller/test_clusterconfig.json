@@ -1,0 +1,79 @@
+{
+    "name": "default",
+    "description": "15测试环境",
+    "cluster": [
+        {
+            "name": "ys-2",
+            "cluster": "default",
+            "address": "10.142.21.152",
+            "port": "30499",
+            "role": "master,alertmanager,web-sshd",
+            "password": "123456"
+        },
+        {
+            "name": "ys-3",
+            "cluster": "default",
+            "address": "10.142.21.153",
+            "port": "30499",
+            "role": "master",
+            "password": "123456"
+        },
+        {
+            "name": "ys-4",
+            "cluster": "default",
+            "address": "10.142.21.154",
+            "port": "30499",
+            "role": "master",
+            "password": "123456"
+        },
+        {
+            "name": "logsh",
+            "cluster": "default",
+            "address": "10.142.21.167",
+            "port": "30254",
+            "role": "es",
+            "password": "123456"
+        },
+        {
+            "name": "ys-5",
+            "cluster": "default",
+            "address": "10.142.21.155",
+            "port": "30254",
+            "role": "slave",
+            "password": "123456"
+        },
+        {
+            "name": "ys-6",
+            "cluster": "default",
+            "address": "10.142.21.156",
+            "port": "30254",
+            "role": "slave",
+            "password": "123456"
+        },
+        {
+            "name": "ys-7",
+            "cluster": "default",
+            "address": "10.142.21.157",
+            "port": "30254",
+            "role": "slave,resource-manager",
+            "password": "123456"
+        }
+    ],
+    "auth": {
+        "name": "ys-2",
+        "cluster": "default",
+        "address": "10.142.21.152",
+        "port": "30254",
+        "role": "auth",
+        "password": "123456"
+    },
+    "image": {
+        "name": "ys-5",
+        "cluster": "default",
+        "address": "10.132.47.126",
+        "port": "30254",
+        "role": "image",
+        "password": "123456"
+    },
+    "status": "running"
+}
