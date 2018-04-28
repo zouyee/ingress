@@ -1,0 +1,5 @@
+[gerrit]
+host=gerrit.cmss.com
+port=29418
+project=BC-PaaS/cluster
+branch=v2.3
