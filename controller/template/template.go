@@ -8,7 +8,7 @@ import (
 	"strings"
 	text_template "text/template"
 
-	"k8s.io/ingress/core/pkg/watch"
+	"github.com/zouyee/kube-cluster/core/watch"
 
 	"github.com/golang/glog"
 	"github.com/mitchellh/mapstructure"

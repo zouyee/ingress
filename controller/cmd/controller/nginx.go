@@ -19,7 +19,7 @@ import (
 	"github.com/coreos/etcd/client"
 	"github.com/golang/glog"
 	uuid "github.com/nu7hatch/gouuid"
-
+	ps "github.com/mitchellh/go-ps"
 	"github.com/zouyee/kube-cluster/controller/config"
 	ngx_template "github.com/zouyee/kube-cluster/controller/template"
 	"github.com/zouyee/kube-cluster/controller/version"
@@ -34,12 +34,14 @@ const (
 	ngxHealthPath = "/healthz"
 
 	errNoChild = "wait: no child processes"
-	tmplPath   = "/usr/local/openresty/nginx/template/nginx.tmpl"
-	//tmplPath = "/Users/zoues/Code/golang/src/github.com/zouyee/kube-cluster/controller/cmd/controller/nginx.tmpl"
-	//cfgPath  = "/Users/zoues/Code/golang/src/github.com/zouyee/kube-cluster/controller/cmd/controller/nginx.conf"
-	cfgPath  = "/usr/local/openresty/nginx/conf/nginx.conf"
+	//tmplPath   = "/usr/local/openresty/nginx/template/nginx.tmpl"
+	tmplPath = "/Users/zoues/Code/golang/src/github.com/zouyee/kube-cluster/controller/cmd/controller/nginx.tmpl"
+	cfgPath  = "/Users/zoues/Code/golang/src/github.com/zouyee/kube-cluster/controller/cmd/controller/nginx.conf"
+	//cfgPath  = "/usr/local/openresty/nginx/conf/nginx.conf"
 	binary   = "/usr/local/openresty/nginx/sbin/nginx"
-	testPath = "/usr/local/openresty/nginx/conf/nginx-cfg"
+	//testPath = "/usr/local/openresty/nginx/conf/nginx-cfg"
+	testPath  = "/Users/zoues/Code/golang/src/github.com/zouyee/kube-cluster/controller/cmd/controller/nginx-conf"
+	
 )
 
 // newNGINXController creates a new NGINX cluster controller.
@@ -424,4 +426,51 @@ func (n NGINXController) Check(_ *http.Request) error {
 		return fmt.Errorf("ingress controller is not healthy")
 	}
 	return nil
+}
+
+func nginxExecCommand(args ...string) *exec.Cmd {
+	ngx := os.Getenv("NGINX_BINARY")
+	if ngx == "" {
+		ngx = binary
+	}
+
+	cmdArgs := []string{"-c", cfgPath}
+	cmdArgs = append(cmdArgs, args...)
+	return exec.Command(ngx, cmdArgs...)
+}
+
+// Stop gracefully stops the NGINX master process.
+func (n *NGINXController) Stop() error {
+	// send stop signal to NGINX
+	glog.Info("Stopping NGINX process")
+	cmd := nginxExecCommand("-s", "quit")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err := cmd.Run()
+	if err != nil {
+		return err
+	}
+
+	// wait for the NGINX process to terminate
+	timer := time.NewTicker(time.Second * 1)
+	for range timer.C {
+		if !IsNginxRunning() {
+			glog.Info("NGINX process has stopped")
+			timer.Stop()
+			break
+		}
+	}
+
+	return nil
+}
+
+// IsNginxRunning returns true if a process with the name 'nginx' is found
+func IsNginxRunning() bool {
+	processes, _ := ps.Processes()
+	for _, p := range processes {
+		if p.Executable() == "nginx" {
+			return true
+		}
+	}
+	return false
 }

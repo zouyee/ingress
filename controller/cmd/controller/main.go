@@ -141,7 +141,9 @@ func main() {
 	go registerHandlers(*port, &ngx)
 
 	// handle Interrupt signal
-	go handleSigterm(&ngx)
+	go handleSigterm(&ngx,func(code int) {
+		os.Exit(code)
+	})
 
 	// wait util SIGTERM signal
 	glog.Infof("shut down cluster controller")
@@ -867,10 +869,23 @@ func registerHandlers(port int, cc *NGINXController) {
 	glog.Fatal(server.ListenAndServe())
 }
 
-func handleSigterm(cc *NGINXController) {
+type exiter func(code int)
+
+func handleSigterm(cc *NGINXController, exit exiter) {
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, syscall.SIGTERM)
 	<-signalChan
-	glog.Info("Received SIGTERM,shutting down")
-	os.Exit(0)
+	glog.Infof("Received SIGTERM, shutting down")
+
+	exitCode := 0
+	if err := cc.Stop(); err != nil {
+		glog.Infof("Error during shutdown: %v", err)
+		exitCode = 1
+	}
+
+	glog.Infof("Handled quit, awaiting Pod deletion")
+	time.Sleep(10 * time.Second)
+
+	glog.Infof("Exiting with %v", exitCode)
+	exit(exitCode)
 }
